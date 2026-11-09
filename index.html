@@ -9,7 +9,7 @@
     <style>
         body { font-family: sans-serif; text-align: center; background: #222; color: white; margin: 0; padding: 20px; }
         #video-container { position: relative; display: inline-block; margin-top: 20px; }
-        video, canvas { border-radius: 10px; background: #000; }
+        video, canvas { border-radius: 10px; background: #000; max-width: 100%; height: auto; }
         canvas { position: absolute; top: 0; left: 0; }
         button, select { padding: 12px 20px; font-size: 16px; margin: 5px; cursor: pointer; border-radius: 5px; border: none; }
         button { background: #007bff; color: white; }
@@ -26,7 +26,7 @@
     <button id="connectBtn">1. เชื่อมต่อบลูทูธ (ESP32)</button>
     <br><br>
     
-    <!-- เพิ่มเมนูเลือกกล้อง -->
+    <!-- เมนูเลือกกล้องป้องกันจอดำ -->
     <select id="cameraSelect">
         <option value="">-- กำลังค้นหากล้อง --</option>
     </select>
@@ -36,7 +36,6 @@
     <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
 
     <div id="video-container">
-        <!-- ปรับขนาดจอให้มาตรฐานขึ้น -->
         <video id="webcam" autoplay playsinline width="640" height="480"></video>
         <canvas id="canvas" width="640" height="480"></canvas>
     </div>
@@ -50,7 +49,7 @@
         let safetyTimer = null;
         let lastCommand = 'S';
         let currentStream = null;
-        let isDetecting = false; // ป้องกันการเรียก AI ซ้อนกัน
+        let isDetecting = false;
 
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
@@ -61,15 +60,14 @@
         const startAiBtn = document.getElementById('startAiBtn');
         const cameraSelect = document.getElementById('cameraSelect');
 
-        // --- ส่วนที่เพิ่มใหม่: ค้นหากล้องทั้งหมดในเครื่อง ---
+        // ค้นหากล้องทั้งหมดในเครื่อง
         async function getCameras() {
             try {
-                // ขออนุญาตใช้กล้อง 1 ครั้งเพื่อให้เบราว์เซอร์ยอมส่งชื่อกล้องทั้งหมดมาให้
                 const initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const videoDevices = devices.filter(device => device.kind === 'videoinput');
                 
-                cameraSelect.innerHTML = ''; // ล้างค่าเริ่มต้น
+                cameraSelect.innerHTML = '';
                 
                 if (videoDevices.length === 0) {
                     cameraSelect.innerHTML = '<option value="">ไม่พบกล้องในเครื่อง</option>';
@@ -83,7 +81,6 @@
                     cameraSelect.appendChild(option);
                 });
 
-                // ปิดกล้องที่ขอชั่วคราวไปก่อน
                 initialStream.getTracks().forEach(track => track.stop());
             } catch (error) {
                 console.error("Error accessing cameras:", error);
@@ -91,15 +88,14 @@
             }
         }
 
-        // ดึงรายชื่อกล้องทันทีที่โหลดเว็บเสร็จ
         window.addEventListener('load', getCameras);
 
-        // 1. ระบบ Bluetooth
+        // 1. ระบบ Bluetooth (ค้นหาด้วยชื่อปกติ "ESP32_Luggage")
         connectBtn.addEventListener('click', async () => {
             try {
-                statusDiv.innerText = "กำลังค้นหา ESP32...";
+                statusDiv.innerText = "กำลังค้นหา ESP32_Luggage...";
                 const device = await navigator.bluetooth.requestDevice({
-                    acceptAllDevices: true,
+                    filters: [{ name: 'ESP32_Luggage' }],
                     optionalServices: [SERVICE_UUID]
                 });
 
@@ -109,7 +105,7 @@
                 
                 statusDiv.innerText = "เชื่อมต่อ ESP32 สำเร็จแล้ว!";
                 connectBtn.disabled = true;
-                startAiBtn.disabled = false; // เปิดให้กดเริ่ม AI ได้
+                startAiBtn.disabled = false;
             } catch (error) {
                 console.error(error);
                 statusDiv.innerText = "การเชื่อมต่อล้มเหลว: " + error.message;
@@ -131,17 +127,15 @@
             }
         }
 
-        // 2. ระบบเปิดกล้องตามที่เลือก และ AI ตรวจจับ
+        // 2. ระบบเปิดกล้องและประมวลผล AI
         startAiBtn.addEventListener('click', async () => {
             startAiBtn.disabled = true;
             statusDiv.innerText = "กำลังโหลดโมเดล AI และเปิดกล้อง...";
             
-            // ถ้ามีกล้องเปิดอยู่ก่อนหน้า ให้ปิดก่อน
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
-            // เลือกกล้องตาม Dropdown
             const selectedCameraId = cameraSelect.value;
             const constraints = {
                 video: {
@@ -155,14 +149,12 @@
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = currentStream;
 
-                // โหลดโมเดล COCO-SSD (โหลดแค่ครั้งเดียว)
                 if (!model) {
                     model = await cocoSsd.load();
                 }
                 
                 statusDiv.innerText = "ระบบพร้อมทำงาน! กำลังตามหาคน...";
                 
-                // เริ่มวิเคราะห์ภาพ
                 if (!isDetecting) {
                     isDetecting = true;
                     detectFrame();
@@ -186,7 +178,6 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (person) {
-                // --- พบคน ---
                 if (safetyTimer) {
                     clearTimeout(safetyTimer);
                     safetyTimer = null;
@@ -208,21 +199,19 @@
                     sendCommand('R');
                 } else {
                     if (normalizedWidth > 0.6) {
-                        sendCommand('S'); // ใกล้ไป
+                        sendCommand('S'); 
                     } else if (normalizedWidth < 0.15) {
-                        sendCommand('S'); // ไกลไป
+                        sendCommand('S'); 
                     } else {
-                        sendCommand('F'); // พอดี เดินตาม
+                        sendCommand('F'); 
                     }
                 }
 
-                // รีเซ็ต Safety Timer ทุกครั้งที่เจอคน
                 safetyTimer = setTimeout(() => {
                     sendCommand('S');
                 }, 1000);
 
             } else {
-                // --- ไม่พบคน ---
                 ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
                 ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
             }
