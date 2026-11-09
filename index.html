@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web App กระเป๋าเดินตาม (AI + BLE)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #222; color: white; margin: 0; padding: 20px; }
+        #video-container { position: relative; display: inline-block; margin-top: 20px; }
+        video, canvas { border-radius: 10px; background: #000; }
+        canvas { position: absolute; top: 0; left: 0; }
+        button, select { padding: 12px 20px; font-size: 16px; margin: 5px; cursor: pointer; border-radius: 5px; border: none; }
+        button { background: #007bff; color: white; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        select { background: #fff; color: #000; max-width: 300px; }
+        #status { margin-top: 15px; font-size: 18px; color: #4caf50; }
+        #command-status { font-size: 24px; font-weight: bold; color: #ffeb3b; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>AI Luggage Tracker</h2>
+    
+    <button id="connectBtn">1. เชื่อมต่อบลูทูธ (ESP32)</button>
+    <br><br>
+    
+    <!-- เพิ่มเมนูเลือกกล้อง -->
+    <select id="cameraSelect">
+        <option value="">-- กำลังค้นหากล้อง --</option>
+    </select>
+    <button id="startAiBtn" disabled>2. เปิดกล้องและ AI</button>
+    
+    <div id="status">สถานะ: รอการเชื่อมต่อ</div>
+    <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
+
+    <div id="video-container">
+        <!-- ปรับขนาดจอให้มาตรฐานขึ้น -->
+        <video id="webcam" autoplay playsinline width="640" height="480"></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+        let bleCharacteristic = null;
+        let model = null;
+        let safetyTimer = null;
+        let lastCommand = 'S';
+        let currentStream = null;
+        let isDetecting = false; // ป้องกันการเรียก AI ซ้อนกัน
+
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const cmdStatusDiv = document.getElementById('command-status');
+        const connectBtn = document.getElementById('connectBtn');
+        const startAiBtn = document.getElementById('startAiBtn');
+        const cameraSelect = document.getElementById('cameraSelect');
+
+        // --- ส่วนที่เพิ่มใหม่: ค้นหากล้องทั้งหมดในเครื่อง ---
+        async function getCameras() {
+            try {
+                // ขออนุญาตใช้กล้อง 1 ครั้งเพื่อให้เบราว์เซอร์ยอมส่งชื่อกล้องทั้งหมดมาให้
+                const initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = ''; // ล้างค่าเริ่มต้น
+                
+                if (videoDevices.length === 0) {
+                    cameraSelect.innerHTML = '<option value="">ไม่พบกล้องในเครื่อง</option>';
+                    return;
+                }
+
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `กล้องตัวที่ ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+
+                // ปิดกล้องที่ขอชั่วคราวไปก่อน
+                initialStream.getTracks().forEach(track => track.stop());
+            } catch (error) {
+                console.error("Error accessing cameras:", error);
+                cameraSelect.innerHTML = '<option value="">ไม่สามารถเข้าถึงกล้องได้</option>';
+            }
+        }
+
+        // ดึงรายชื่อกล้องทันทีที่โหลดเว็บเสร็จ
+        window.addEventListener('load', getCameras);
+
+        // 1. ระบบ Bluetooth
+        connectBtn.addEventListener('click', async () => {
+            try {
+                statusDiv.innerText = "กำลังค้นหา ESP32...";
+                const device = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+                
+                statusDiv.innerText = "เชื่อมต่อ ESP32 สำเร็จแล้ว!";
+                connectBtn.disabled = true;
+                startAiBtn.disabled = false; // เปิดให้กดเริ่ม AI ได้
+            } catch (error) {
+                console.error(error);
+                statusDiv.innerText = "การเชื่อมต่อล้มเหลว: " + error.message;
+            }
+        });
+
+        async function sendCommand(cmd) {
+            if (cmd === lastCommand) return;
+            lastCommand = cmd;
+            cmdStatusDiv.innerText = "คำสั่งปัจจุบัน: " + cmd;
+            
+            if (bleCharacteristic) {
+                try {
+                    const encoder = new TextEncoder();
+                    await bleCharacteristic.writeValue(encoder.encode(cmd));
+                } catch (err) {
+                    console.error("ส่งคำสั่งไม่สำเร็จ: ", err);
+                }
+            }
+        }
+
+        // 2. ระบบเปิดกล้องตามที่เลือก และ AI ตรวจจับ
+        startAiBtn.addEventListener('click', async () => {
+            startAiBtn.disabled = true;
+            statusDiv.innerText = "กำลังโหลดโมเดล AI และเปิดกล้อง...";
+            
+            // ถ้ามีกล้องเปิดอยู่ก่อนหน้า ให้ปิดก่อน
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            // เลือกกล้องตาม Dropdown
+            const selectedCameraId = cameraSelect.value;
+            const constraints = {
+                video: {
+                    deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                }
+            };
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+
+                // โหลดโมเดล COCO-SSD (โหลดแค่ครั้งเดียว)
+                if (!model) {
+                    model = await cocoSsd.load();
+                }
+                
+                statusDiv.innerText = "ระบบพร้อมทำงาน! กำลังตามหาคน...";
+                
+                // เริ่มวิเคราะห์ภาพ
+                if (!isDetecting) {
+                    isDetecting = true;
+                    detectFrame();
+                }
+            } catch (error) {
+                console.error("Camera Error:", error);
+                statusDiv.innerText = "เปิดกล้องไม่สำเร็จ: " + error.message;
+                startAiBtn.disabled = false;
+            }
+        });
+
+        async function detectFrame() {
+            if (video.readyState !== 4) {
+                requestAnimationFrame(detectFrame);
+                return;
+            }
+
+            const predictions = await model.detect(video);
+            const person = predictions.find(p => p.class === 'person' && p.score > 0.60);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (person) {
+                // --- พบคน ---
+                if (safetyTimer) {
+                    clearTimeout(safetyTimer);
+                    safetyTimer = null;
+                }
+
+                const [x, y, width, height] = person.bbox;
+                ctx.strokeStyle = "#00FF00";
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x, y, width, height);
+
+                const centerX = x + (width / 2);
+                const screenWidth = canvas.width;
+                const normalizedX = centerX / screenWidth;
+                const normalizedWidth = width / screenWidth;
+
+                if (normalizedX < 0.35) {
+                    sendCommand('L');
+                } else if (normalizedX > 0.65) {
+                    sendCommand('R');
+                } else {
+                    if (normalizedWidth > 0.6) {
+                        sendCommand('S'); // ใกล้ไป
+                    } else if (normalizedWidth < 0.15) {
+                        sendCommand('S'); // ไกลไป
+                    } else {
+                        sendCommand('F'); // พอดี เดินตาม
+                    }
+                }
+
+                // รีเซ็ต Safety Timer ทุกครั้งที่เจอคน
+                safetyTimer = setTimeout(() => {
+                    sendCommand('S');
+                }, 1000);
+
+            } else {
+                // --- ไม่พบคน ---
+                ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+                ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
+            }
+
+            requestAnimationFrame(detectFrame);
+        }
+    </script>
+</body>
+</html>
