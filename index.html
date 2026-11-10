@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web App กระเป๋าเดินตาม (Skeleton + Tracking)</title>
-    <!-- โหลดไลบรารี AI Pose Detection (MoveNet) -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
     <style>
@@ -45,7 +44,6 @@
         let lastCommand = 'S';
         let isDetecting = false;
         
-        // ตัวแปรสำหรับจำตำแหน่งเป้าหมายล่าสุด
         let lastTargetCenter = null; 
 
         const video = document.getElementById('webcam');
@@ -76,7 +74,6 @@
             }
         });
 
-        // ฟังก์ชันสำคัญ: ส่งคำสั่ง Wi-Fi ไปที่ ESP32
         async function sendCommand(cmd) {
             if (cmd === lastCommand) return;
             lastCommand = cmd;
@@ -130,7 +127,6 @@
             }
         });
 
-        // ฟังก์ชันตรวจจับและประมวลผลการเดิน
         async function detectFrame() {
             if (!video || video.readyState !== 4 || !detector) {
                 requestAnimationFrame(detectFrame);
@@ -144,7 +140,6 @@
                 if (poses && poses.length > 0) {
                     let targetPose = null;
 
-                    // ระบบล็อกเป้าหมาย (จำคน)
                     if (!lastTargetCenter) {
                         targetPose = poses[0]; 
                     } else {
@@ -160,15 +155,15 @@
                                 targetPose = pose;
                             }
                         }
-                        // ถ้าเป้าหมายกระโดดไปไกลเกิน 200 พิกเซล ให้ถือว่าหลุดเฟรมและหยุด
-                        if (minDistance > 200) {
+                        
+                        // แก้ไข 1: ใช้สัดส่วน 50% ของความกว้างจอ แทนตัวเลข 200 พิกเซล
+                        if (minDistance > (canvas.width * 0.5)) {
                             targetPose = null;
                             lastTargetCenter = null;
                             sendCommand('S');
                         }
                     }
 
-                    // ถ้ายืนยันเป้าหมายได้ เริ่มวาดเส้นและส่งคำสั่งมอเตอร์
                     if (targetPose && targetPose.box) {
                         const x = targetPose.box.xMin;
                         const y = targetPose.box.yMin;
@@ -182,14 +177,13 @@
                             safetyTimer = null;
                         }
 
-                        // วาดเส้นโครงกระดูก
                         const adjacentKeyPoints = poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.MoveNet);
                         ctx.lineWidth = 4;
                         ctx.strokeStyle = '#00FFCC'; 
                         adjacentKeyPoints.forEach(([i, j]) => {
                             const kp1 = targetPose.keypoints[i];
                             const kp2 = targetPose.keypoints[j];
-                            if (kp1.score > 0.4 && kp2.score > 0.4) {
+                            if (kp1.score > 0.35 && kp2.score > 0.35) { // ลดความเข้มงวดให้วาดเส้นง่ายขึ้น
                                 ctx.beginPath();
                                 ctx.moveTo(kp1.x, kp1.y);
                                 ctx.lineTo(kp2.x, kp2.y);
@@ -197,31 +191,29 @@
                             }
                         });
 
-                        // วาดกรอบรอบตัว
                         ctx.strokeStyle = "rgba(0, 255, 204, 0.7)"; 
                         ctx.lineWidth = 2; 
                         ctx.strokeRect(x, y, w, h);
 
-                        // --- ระบบส่งคำสั่งควบคุม (ซ้าย, ขวา, เดินหน้า, หยุด) ---
                         const normalizedX = lastTargetCenter.x / canvas.width;
-                        const normalizedW = w / canvas.width;
+                        // แก้ไข 2: ใช้ความสูง (h) เทียบกับความสูงหน้าจอ (canvas.height) ในการคำนวณระยะ
+                        const normalizedH = h / canvas.height; 
 
                         if (normalizedX < 0.35) {
-                            sendCommand('L'); // คนเบี่ยงไปซ้าย สั่งเลี้ยวซ้าย
+                            sendCommand('L'); 
                         } else if (normalizedX > 0.65) {
-                            sendCommand('R'); // คนเบี่ยงไปขวา สั่งเลี้ยวขวา
+                            sendCommand('R'); 
                         } else {
-                            // คนอยู่ตรงกลาง เช็คระยะห่าง
-                            if (normalizedW > 0.6) {
-                                sendCommand('S'); // ใกล้เกินไป ให้หยุด
-                            } else if (normalizedW < 0.15) {
-                                sendCommand('S'); // ไกลเกินไปหรือหาไม่เจอ ให้หยุด
+                            // คนอยู่ตรงกลาง เช็คว่าใกล้หรือไกลเกินไปไหม
+                            if (normalizedH > 0.85) { 
+                                sendCommand('S'); // ตัวใหญ่คับจอ = ใกล้เกินไป ให้หยุด
+                            } else if (normalizedH < 0.20) { 
+                                sendCommand('S'); // ตัวเล็กมาก = ไกลเกินไป ให้หยุดรอ
                             } else {
-                                sendCommand('F'); // ระยะกำลังดี สั่งเดินหน้าตาม
+                                sendCommand('F'); // ระยะกำลังดี สั่งเดินหน้า!
                             }
                         }
 
-                        // ตั้งเวลาหยุดอัตโนมัติหากหาคนไม่เจอเกิน 1 วินาที
                         safetyTimer = setTimeout(() => {
                             sendCommand('S');
                             lastTargetCenter = null;
