@@ -8,9 +8,11 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #222; color: white; margin: 0; padding: 20px; }
-        #video-container { position: relative; display: inline-block; margin-top: 20px; }
-        video, canvas { border-radius: 10px; background: #000; max-width: 100%; height: auto; }
-        canvas { position: absolute; top: 0; left: 0; }
+        /* ปรับ CSS ให้ Canvas และ Video ซ้อนทับกันแบบ 100% เสมอ */
+        #video-container { position: relative; width: 100%; max-width: 640px; margin: 20px auto; }
+        video { width: 100%; height: auto; display: block; border-radius: 10px; background: #000; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        
         button, select, input { padding: 12px; font-size: 16px; margin: 5px; border-radius: 5px; border: none; }
         button { background: #007bff; color: white; cursor: pointer; }
         button:disabled { background: #555; cursor: not-allowed; }
@@ -33,8 +35,8 @@
     <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
 
     <div id="video-container">
-        <video id="webcam" autoplay playsinline width="640" height="480"></video>
-        <canvas id="canvas" width="640" height="480"></canvas>
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
     </div>
 
     <script>
@@ -52,7 +54,6 @@
         const statusDiv = document.getElementById('status');
         const cameraSelect = document.getElementById('cameraSelect');
 
-        // 1. ป้องกัน undefined ตอนค้นหากล้อง (Camera Devices Check)
         window.addEventListener('load', async () => {
             try {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
@@ -68,11 +69,10 @@
                 });
             } catch (err) {
                 console.error("Error loading cameras:", err);
-                cameraSelect.innerHTML = '<option value="">เกิดข้อผิดพลาดในการโหลดกล้อง</option>';
+                cameraSelect.innerHTML = '<option value="">เกิดข้อผิดพลาด</option>';
             }
         });
 
-        // 2. ฟังก์ชันส่งคำสั่งผ่าน Wi-Fi แบบไม่บล็อกระบบ
         async function sendCommand(cmd) {
             if (cmd === lastCommand) return;
             lastCommand = cmd;
@@ -82,13 +82,10 @@
             if (ip) {
                 try {
                     fetch(`http://${ip}/${cmd}`, { method: 'GET', mode: 'no-cors' }).catch(() => {});
-                } catch(e) {
-                    // ป้องกัน Network Error ค้าง
-                }
+                } catch(e) {}
             }
         }
 
-        // 3. ป้องกัน undefined ตอนดึงภาพจากกล้อง
         startAiBtn.addEventListener('click', async () => {
             const ip = espIpInput.value.trim();
             if (!ip) { 
@@ -103,11 +100,21 @@
             const constraints = { 
                 video: selectedCameraId 
                     ? { deviceId: { exact: selectedCameraId }, width: { ideal: 640 }, height: { ideal: 480 } }
-                    : { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } } // fallback ใช้กล้องหลัง
+                    : { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }
             };
 
             try {
                 video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                // --- ส่วนที่แก้ไข: ซิงค์ขนาดวิดีโอและ Canvas ให้ตรงความละเอียดจริง ---
+                video.onloadedmetadata = () => {
+                    video.width = video.videoWidth;
+                    video.height = video.videoHeight;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                };
+                // --------------------------------------------------------
+
                 if (!model) {
                     model = await cocoSsd.load();
                 }
@@ -117,13 +124,12 @@
                     detectFrame(); 
                 }
             } catch (err) {
-                console.error("Start Camera Error:", err);
+                console.error("Camera Error:", err);
                 statusDiv.innerText = "Error: " + err.message;
                 startAiBtn.disabled = false;
             }
         });
 
-        // 4. ป้องกัน undefined ตอนโมเดลอ่านค่า bbox
         async function detectFrame() {
             if (!video || video.readyState !== 4 || !model) {
                 requestAnimationFrame(detectFrame);
@@ -133,7 +139,6 @@
             try {
                 const predictions = await model.detect(video);
                 
-                // ตรวจสอบ array predictions ไม่ให้เป็น undefined ก่อนนำไปหาคน
                 let person = null;
                 if (predictions && Array.isArray(predictions)) {
                     person = predictions.find(p => p.class === 'person' && p.score > 0.60);
@@ -141,7 +146,6 @@
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // ตรวจสอบขั้นสุดท้าย: ต้องมีคน มี bbox และ bbox ต้องเป็นรูปแบบ array เท่านั้น
                 if (person && person.bbox && Array.isArray(person.bbox)) {
                     if (safetyTimer) {
                         clearTimeout(safetyTimer);
@@ -168,7 +172,7 @@
                     ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
                 }
             } catch (err) {
-                console.warn("Detection skipped this frame:", err);
+                console.warn("Detection skipped:", err);
             }
             
             requestAnimationFrame(detectFrame);
