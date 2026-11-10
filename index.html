@@ -4,15 +4,45 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web App กระเป๋าเดินตาม (Wi-Fi Mode)</title>
+    <!-- โหลดไลบรารี AI จาก TensorFlow.js -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #222; color: white; margin: 0; padding: 20px; }
-        /* ปรับ CSS ให้ Canvas และ Video ซ้อนทับกันแบบ 100% เสมอ */
-        #video-container { position: relative; width: 100%; max-width: 640px; margin: 20px auto; }
-        video { width: 100%; height: auto; display: block; border-radius: 10px; background: #000; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            background: #222; 
+            color: white; 
+            margin: 0; 
+            padding: 20px; 
+        }
         
+        /* --- แก้ไข CSS เพื่อแก้จอดำและปรับให้พอดีมือถือ --- */
+        #video-container { 
+            position: relative; 
+            width: 100%; 
+            max-width: 640px; /* จำกัดความกว้างไม่ให้ล้นจอบนคอมพิวเตอร์ */
+            margin: 20px auto; 
+        }
+        video { 
+            width: 100%; 
+            height: auto; 
+            display: block; 
+            border-radius: 10px; 
+            background: #000; /* พื้นหลังสีดำเผื่อตอนกล้องยังไม่มา */
+        }
+        canvas { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; /* ยืดให้กว้างเท่า video */
+            height: 100%; /* ยืดให้สูงเท่า video */
+            background: transparent; /* สำคัญ: ทำให้โปร่งใส ไม่บังกล้อง */
+            pointer-events: none; /* ให้แตะจอทะลุ canvas ได้ */
+            z-index: 10;
+        }
+        /* ------------------------------------------- */
+
         button, select, input { padding: 12px; font-size: 16px; margin: 5px; border-radius: 5px; border: none; }
         button { background: #007bff; color: white; cursor: pointer; }
         button:disabled { background: #555; cursor: not-allowed; }
@@ -34,6 +64,7 @@
     <div id="status">สถานะ: รอเปิดกล้อง</div>
     <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
 
+    <!-- ลบ width/height ออก เพื่อให้ปรับขนาดตามจอมือถืออัตโนมัติ -->
     <div id="video-container">
         <video id="webcam" autoplay playsinline></video>
         <canvas id="canvas"></canvas>
@@ -54,6 +85,7 @@
         const statusDiv = document.getElementById('status');
         const cameraSelect = document.getElementById('cameraSelect');
 
+        // ดึงรายชื่อกล้องตอนเปิดเว็บ
         window.addEventListener('load', async () => {
             try {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
@@ -69,10 +101,11 @@
                 });
             } catch (err) {
                 console.error("Error loading cameras:", err);
-                cameraSelect.innerHTML = '<option value="">เกิดข้อผิดพลาด</option>';
+                cameraSelect.innerHTML = '<option value="">เกิดข้อผิดพลาดในการโหลดกล้อง</option>';
             }
         });
 
+        // ฟังก์ชันส่งคำสั่ง Wi-Fi ไปหา ESP32
         async function sendCommand(cmd) {
             if (cmd === lastCommand) return;
             lastCommand = cmd;
@@ -86,6 +119,7 @@
             }
         }
 
+        // เริ่มเปิดกล้องและ AI
         startAiBtn.addEventListener('click', async () => {
             const ip = espIpInput.value.trim();
             if (!ip) { 
@@ -106,14 +140,13 @@
             try {
                 video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
                 
-                // --- ส่วนที่แก้ไข: ซิงค์ขนาดวิดีโอและ Canvas ให้ตรงความละเอียดจริง ---
+                // --- ซิงค์ความละเอียดวิดีโอกับ Canvas ให้ตรงกันเพื่อไม่ให้กรอบเขียวลอย ---
                 video.onloadedmetadata = () => {
                     video.width = video.videoWidth;
                     video.height = video.videoHeight;
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                 };
-                // --------------------------------------------------------
 
                 if (!model) {
                     model = await cocoSsd.load();
@@ -130,6 +163,7 @@
             }
         });
 
+        // วนลูปประมวลผลภาพหาคน
         async function detectFrame() {
             if (!video || video.readyState !== 4 || !model) {
                 requestAnimationFrame(detectFrame);
@@ -160,11 +194,13 @@
                     const normalizedX = (x + (w / 2)) / canvas.width;
                     const normalizedW = w / canvas.width;
 
-                    if (normalizedX < 0.35) sendCommand('L');
-                    else if (normalizedX > 0.65) sendCommand('R');
-                    else if (normalizedW > 0.6 || normalizedW < 0.15) sendCommand('S');
-                    else sendCommand('F');
+                    // เงื่อนไขสั่งเลี้ยวและเดิน
+                    if (normalizedX < 0.35) sendCommand('L'); // คนอยู่ซ้าย
+                    else if (normalizedX > 0.65) sendCommand('R'); // คนอยู่ขวา
+                    else if (normalizedW > 0.6 || normalizedW < 0.15) sendCommand('S'); // คนอยู่ใกล้ไปหรือไกลไป
+                    else sendCommand('F'); // คนอยู่ตรงกลางและระยะพอดี
 
+                    // หากหยุดหาคนเจอเกิน 1 วินาที ให้สั่งหยุดเพื่อความปลอดภัย
                     safetyTimer = setTimeout(() => sendCommand('S'), 1000);
                 } else {
                     ctx.fillStyle = "rgba(255,0,0,0.5)"; 
@@ -172,7 +208,7 @@
                     ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
                 }
             } catch (err) {
-                console.warn("Detection skipped:", err);
+                console.warn("Detection skipped this frame:", err);
             }
             
             requestAnimationFrame(detectFrame);
