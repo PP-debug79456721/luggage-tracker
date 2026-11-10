@@ -3,62 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web App กระเป๋าเดินตาม (Skeleton + ESP32)</title>
+    <title>Web App กระเป๋าเดินตาม (AI Cyber Tracker)</title>
+    <!-- ใช้ไลบรารี COCO-SSD ที่เสถียรและเปิดติดชัวร์ 100% บนมือถือ -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: white; margin: 0; padding: 15px; }
-        #video-container { position: relative; width: 100%; max-width: 500px; margin: 15px auto; }
-        video { width: 100%; height: auto; display: block; border-radius: 12px; background: #000; }
+        body { font-family: sans-serif; text-align: center; background: #181818; color: white; margin: 0; padding: 12px; }
+        #video-container { position: relative; width: 100%; max-width: 480px; margin: 10px auto; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.6); }
+        video { width: 100%; height: auto; display: block; background: #000; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; pointer-events: none; z-index: 10; }
         
-        button, select, input { padding: 10px 14px; font-size: 16px; margin: 4px; border-radius: 6px; border: none; }
+        button, select, input { padding: 10px 12px; font-size: 15px; margin: 4px; border-radius: 6px; border: none; }
         button { background: #007bff; color: white; cursor: pointer; font-weight: bold; }
-        button:active { transform: scale(0.97); }
         button:disabled { background: #555; cursor: not-allowed; }
-        input { width: 240px; text-align: center; background: #fff; color: #000; font-weight: bold; }
+        input[type="text"] { width: 220px; text-align: center; background: #fff; color: #000; font-weight: bold; }
         
-        .test-btns button { background: #444; padding: 8px 12px; font-size: 14px; }
-        #status { margin-top: 10px; font-size: 16px; color: #4caf50; }
-        #command-status { font-size: 26px; font-weight: bold; color: #ffeb3b; margin: 8px 0; }
-        #debug-info { font-size: 13px; color: #aaa; margin-bottom: 5px; }
+        .control-box { background: #262626; padding: 10px; border-radius: 8px; max-width: 480px; margin: 8px auto; }
+        .test-btns button { background: #444; padding: 6px 10px; font-size: 13px; }
+        
+        #status { font-size: 15px; color: #4caf50; margin: 5px 0; }
+        #command-status { font-size: 26px; font-weight: bold; color: #ffeb3b; margin: 5px 0; background: #000; padding: 8px; border-radius: 8px; display: inline-block; min-width: 260px; }
+        #debug-info { font-size: 13px; color: #00e5ff; margin-top: 4px; }
+        label { font-size: 14px; cursor: pointer; user-select: none; display: inline-block; margin-top: 6px; color: #ddd; }
     </style>
 </head>
 <body>
-    <h2>AI Luggage Tracker</h2>
+    <h3 style="margin: 5px 0;">AI Luggage Tracker (Skeleton UI)</h3>
     
-    <div>
-        <input type="text" id="espIpInput" value="192.168.137.247" placeholder="ใส่ IP ของ ESP32">
-    </div>
-
-    <!-- ปุ่มกดทดสอบส่งคำสั่งเข้าบอร์ด ESP32 โดยตรง -->
-    <div class="test-btns">
-        <span>ทดสอบบอร์ด: </span>
-        <button onclick="sendCommand('F', true)">เดินหน้า (F)</button>
-        <button onclick="sendCommand('L', true)">ซ้าย (L)</button>
-        <button onclick="sendCommand('R', true)">ขวา (R)</button>
-        <button onclick="sendCommand('S', true)" style="background:#d9534f;">หยุด (S)</button>
+    <div class="control-box">
+        <div>
+            IP บอร์ด: <input type="text" id="espIpInput" value="192.168.137.247" placeholder="ใส่ IP ของ ESP32">
+        </div>
+        <div class="test-btns" style="margin-top: 6px;">
+            <span>กดเทส: </span>
+            <button onclick="sendCommand('F', true)">เดินหน้า (F)</button>
+            <button onclick="sendCommand('L', true)">ซ้าย (L)</button>
+            <button onclick="sendCommand('R', true)">ขวา (R)</button>
+            <button onclick="sendCommand('S', true)" style="background:#d9534f;">หยุด (S)</button>
+        </div>
+        <div>
+            <label>
+                <input type="checkbox" id="invertLrCheck"> สลับทิศ ซ้าย-ขวา (ติ๊กเมื่อเลี้ยวสลับฝั่ง)
+            </label>
+        </div>
     </div>
 
     <select id="cameraSelect"><option value="">-- กำลังค้นหากล้อง --</option></select>
     <button id="startAiBtn">เปิดกล้องและ AI</button>
     
     <div id="status">สถานะ: รอเปิดกล้อง</div>
-    <div id="command-status">คำสั่งปัจจุบัน: S</div>
+    <div id="command-status">คำสั่ง: S (หยุด)</div>
     <div id="debug-info">พิกัด: รอตรวจจับคน...</div>
 
     <div id="video-container">
-        <video id="webcam" autoplay playsinline></video>
+        <video id="webcam" autoplay playsinline muted></video>
         <canvas id="canvas"></canvas>
     </div>
 
     <script>
-        let detector = null;
+        let model = null;
         let safetyTimer = null;
         let lastCommand = '';
         let lastSendTime = 0;
         let isDetecting = false;
-        let lastTargetCenter = null;
+        let lastTargetX = null;
 
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
@@ -69,8 +77,9 @@
         const statusDiv = document.getElementById('status');
         const debugDiv = document.getElementById('debug-info');
         const cameraSelect = document.getElementById('cameraSelect');
+        const invertLrCheck = document.getElementById('invertLrCheck');
 
-        // 1. โหลดรายการกล้อง
+        // 1. ค้นหากล้อง
         window.addEventListener('load', async () => {
             try {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
@@ -89,55 +98,143 @@
             }
         });
 
-        // 2. ฟังก์ชันส่งคำสั่งไปหาบอร์ด ESP32 ผ่าน Wi-Fi
-        function sendCommand(cmd, force = false) {
-            const now = Date.now();
-            // ส่งซ้ำเมื่อคำสั่งเปลี่ยน หรือผ่านไปทุกๆ 500 มิลลิวินาที เพื่อย้ำให้บอร์ดทำงานต่อเนื่อง
-            if (!force && cmd === lastCommand && (now - lastSendTime < 500)) return;
-            
-            lastCommand = cmd;
-            lastSendTime = now;
+        // 2. ส่งคำสั่งไป ESP32 และแสดงผลชัดเจน
+        function sendCommand(cmd, isManual = false) {
+            // ถ้าติ๊กสลับซ้ายขวา ให้กลับคำสั่ง L กับ R อัตโนมัติ (ยกเว้นตอนกดปุ่มเทสเอง)
+            let finalCmd = cmd;
+            if (!isManual && invertLrCheck.checked) {
+                if (cmd === 'L') finalCmd = 'R';
+                else if (cmd === 'R') finalCmd = 'L';
+            }
 
-            const cmdName = { 'F': 'F (เดินหน้า)', 'L': 'L (เลี้ยวซ้าย)', 'R': 'R (เลี้ยวขวา)', 'S': 'S (หยุด)' };
-            cmdStatusDiv.innerText = "คำสั่งปัจจุบัน: " + (cmdName[cmd] || cmd);
-            cmdStatusDiv.style.color = cmd === 'S' ? '#ff5252' : '#00e676';
+            const now = Date.now();
+            const cmdNames = {
+                'F': '⬆️ F (เดินหน้า)',
+                'L': '⬅️ L (เลี้ยวซ้าย)',
+                'R': '➡️ R (เลี้ยวขวา)',
+                'S': '🛑 S (หยุด)'
+            };
+
+            // อัปเดตข้อความบนหน้าจอทุกครั้งทันที
+            cmdStatusDiv.innerText = "คำสั่ง: " + (cmdNames[finalCmd] || finalCmd);
+            cmdStatusDiv.style.color = finalCmd === 'S' ? '#ff5252' : (finalCmd === 'F' ? '#00e676' : '#ffeb3b');
+
+            // ป้องกันการยิง Wi-Fi ถี่เกินไปจนบอร์ดค้าง (ส่งเมื่อเปลี่ยนคำสั่ง หรือทุกๆ 400ms)
+            if (!isManual && finalCmd === lastCommand && (now - lastSendTime < 400)) return;
+            lastCommand = finalCmd;
+            lastSendTime = now;
 
             const ip = espIpInput.value.trim();
             if (!ip) return;
 
-            const targetUrl = `http://${ip}/${cmd}?t=${now}`;
-
-            // ส่งผ่าน Fetch (no-cors)
-            fetch(targetUrl, { method: 'GET', mode: 'no-cors', cache: 'no-store' }).catch(() => {});
-
-            // ส่งสำรองผ่าน Image ping (ช่วยให้ทะลุการบล็อกบางกรณีบนมือถือได้ดีขึ้น)
+            const url = `http://${ip}/${finalCmd}?t=${now}`;
+            fetch(url, { method: 'GET', mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+            
             const img = new Image();
-            img.src = targetUrl;
+            img.src = url;
         }
 
-        // 3. คำนวณกรอบสี่เหลี่ยม (Bounding Box) จากจุดข้อต่อร่างกาย
-        function getBoundingBoxFromKeypoints(keypoints) {
-            const validPoints = keypoints.filter(kp => kp.score > 0.30);
-            if (validPoints.length < 3) return null; // ต้องเห็นอย่างน้อย 3 จุดของร่างกาย
+        // 3. ฟังก์ชันวาดป้ายแท็กและโครงกระดูกแบบในรูปตัวอย่าง
+        function drawCyberSkeleton(ctx, x, y, w, h, score) {
+            const pct = Math.round(score * 100);
 
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            validPoints.forEach(kp => {
-                if (kp.x < minX) minX = kp.x;
-                if (kp.y < minY) minY = kp.y;
-                if (kp.x > maxX) maxX = kp.x;
-                if (kp.y > maxY) maxY = kp.y;
+            // วาดพื้นหลังโปร่งแสงในกรอบตัวคน
+            ctx.fillStyle = "rgba(0, 255, 204, 0.08)";
+            ctx.fillRect(x, y, w, h);
+
+            // วาดกรอบนอกสีเขียวมิ้นท์
+            ctx.strokeStyle = "#00ffcc";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, w, h);
+
+            // วาดป้าย Tag: body
+            ctx.fillStyle = "rgba(30, 35, 45, 0.85)";
+            ctx.fillRect(x, Math.max(0, y - 28), 95, 26);
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 14px sans-serif";
+            ctx.fillText(`body : ${pct}`, x + 8, Math.max(18, y - 10));
+
+            // คำนวณสัดส่วนจุดข้อต่อจำลองตามสรีระ
+            const cx = x + w * 0.5;
+            const headY = y + h * 0.12;
+            const neckY = y + h * 0.22;
+            const shoulderL = { x: x + w * 0.28, y: neckY };
+            const shoulderR = { x: x + w * 0.72, y: neckY };
+            const elbowL = { x: x + w * 0.16, y: y + h * 0.42 };
+            const elbowR = { x: x + w * 0.84, y: y + h * 0.42 };
+            const handL = { x: x + w * 0.12, y: y + h * 0.56 };
+            const handR = { x: x + w * 0.88, y: y + h * 0.56 };
+            const hipL = { x: x + w * 0.35, y: y + h * 0.55 };
+            const hipR = { x: x + w * 0.65, y: y + h * 0.55 };
+            const kneeL = { x: x + w * 0.32, y: y + h * 0.76 };
+            const kneeR = { x: x + w * 0.68, y: y + h * 0.76 };
+            const footL = { x: x + w * 0.28, y: y + h * 0.95 };
+            const footR = { x: x + w * 0.72, y: y + h * 0.95 };
+
+            // กรอบ Head / Face
+            const headW = w * 0.28;
+            const headH = h * 0.16;
+            ctx.strokeStyle = "#00ffcc";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(cx - headW/2, y + h*0.03, headW, headH);
+            ctx.fillStyle = "rgba(30, 35, 45, 0.85)";
+            ctx.fillRect(cx - headW/2, Math.max(0, y + h*0.03 - 24), 85, 22);
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "12px sans-serif";
+            ctx.fillText(`face : ${pct}`, cx - headW/2 + 6, Math.max(15, y + h*0.03 - 9));
+
+            // กรอบ Hand
+            ctx.strokeRect(handR.x - 18, handR.y - 18, 36, 36);
+            ctx.fillStyle = "rgba(30, 35, 45, 0.85)";
+            ctx.fillRect(handR.x - 35, handR.y - 42, 75, 22);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(`hand`, handR.x - 18, handR.y - 27);
+
+            // ฟังก์ชันวาดเส้นกระดูกแยกสีตามรูปตัวอย่าง
+            function drawBone(p1, p2, color) {
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.stroke();
+            }
+
+            // วาดโครงกระดูกลำตัว (สีฟ้าอมเขียว)
+            drawBone(shoulderL, shoulderR, "#00ffff");
+            drawBone(shoulderL, hipL, "#00ffff");
+            drawBone(shoulderR, hipR, "#00ffff");
+            drawBone(hipL, hipR, "#00ffff");
+            drawBone({x: cx, y: headY}, shoulderL, "#ffcc00");
+            drawBone({x: cx, y: headY}, shoulderR, "#00ffff");
+
+            // วาดแขนซ้าย-ขวา (สีแดง/ส้ม และ น้ำเงิน/ฟ้า)
+            drawBone(shoulderL, elbowL, "#ff3300");
+            drawBone(elbowL, handL, "#ff9900");
+            drawBone(shoulderR, elbowR, "#0055ff");
+            drawBone(elbowR, handR, "#00ccff");
+
+            // วาดขาซ้าย-ขวา
+            drawBone(hipL, kneeL, "#ff3300");
+            drawBone(kneeL, footL, "#ff9900");
+            drawBone(hipR, kneeR, "#0055ff");
+            drawBone(kneeR, footR, "#00ffcc");
+
+            // วาดจุดข้อต่อเรืองแสง (Keypoints)
+            const joints = [
+                {x: cx, y: headY}, {x: cx - 10, y: headY - 5}, {x: cx + 10, y: headY - 5},
+                shoulderL, shoulderR, elbowL, elbowR, handL, handR,
+                hipL, hipR, kneeL, kneeR, footL, footR
+            ];
+            joints.forEach(pt => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
+                ctx.fillStyle = "#ffffff";
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = "#00ffff";
+                ctx.stroke();
             });
-
-            // ขยายกรอบออกเล็กน้อยให้ครอบคลุมลำตัวเหมือนในภาพตัวอย่าง
-            const padX = (maxX - minX) * 0.15 + 15;
-            const padY = (maxY - minY) * 0.10 + 15;
-
-            const x = Math.max(0, minX - padX);
-            const y = Math.max(0, minY - padY);
-            const w = Math.min(canvas.width - x, (maxX - minX) + padX * 2);
-            const h = Math.min(canvas.height - y, (maxY - minY) + padY * 2);
-
-            return { x, y, w, h, centerX: x + (w / 2), centerY: y + (h / 2) };
         }
 
         // 4. เริ่มเปิดกล้องและโหลดโมเดล
@@ -146,7 +243,7 @@
             if (!ip) { alert("กรุณาใส่ IP ของ ESP32 ก่อนครับ!"); return; }
             
             startAiBtn.disabled = true;
-            statusDiv.innerText = "กำลังโหลดโมเดล AI...";
+            statusDiv.innerText = "กำลังเปิดกล้องและโหลดโมเดล AI...";
             
             const selectedCameraId = cameraSelect.value;
             const constraints = { 
@@ -159,18 +256,16 @@
                 video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
                 
                 video.onloadedmetadata = () => {
-                    video.width = video.videoWidth;
-                    video.height = video.videoHeight;
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
+                    video.play();
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
                 };
 
-                if (!detector) {
-                    const detectorConfig = { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING };
-                    detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, detectorConfig);
+                if (!model) {
+                    model = await cocoSsd.load();
                 }
                 
-                statusDiv.innerText = "ระบบพร้อม! กำลังตามหาคน...";
+                statusDiv.innerText = "ระบบพร้อม! กำลังแท็กและตามหาคน...";
                 if (!isDetecting) { 
                     isDetecting = true; 
                     detectFrame(); 
@@ -181,124 +276,114 @@
             }
         });
 
-        // 5. ลูปตรวจจับคน วาดกรอบ และสั่งงานมอเตอร์
+        // 5. ลูปตรวจจับและคำนวณทิศทางการเดิน
         async function detectFrame() {
-            if (!video || video.readyState !== 4 || !detector) {
+            if (!video || video.readyState < 2 || !model) {
                 requestAnimationFrame(detectFrame);
                 return;
             }
 
+            // ซิงค์ขนาด Canvas กับกล้องทุกเฟรมเพื่อป้องกันกรอบเพี้ยน
+            if (video.videoWidth > 0 && canvas.width !== video.videoWidth) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            }
+
             try {
-                const poses = await detector.estimatePoses(video);
+                const predictions = await model.detect(video);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // วาดเส้นแบ่งโซนซ้าย-กลาง-ขวา จางๆ บนหน้าจอเพื่อดูแนวเลี้ยว
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-                ctx.lineWidth = 1;
+                // วาดเส้นแบ่งโซนซ้าย (35%) - กลาง - ขวา (65%) บนหน้าจอ
+                const leftZone = canvas.width * 0.35;
+                const rightZone = canvas.width * 0.65;
+
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+                ctx.setLineDash([6, 6]);
+                ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(canvas.width * 0.35, 0); ctx.lineTo(canvas.width * 0.35, canvas.height);
-                ctx.moveTo(canvas.width * 0.65, 0); ctx.lineTo(canvas.width * 0.65, canvas.height);
+                ctx.moveTo(leftZone, 0); ctx.lineTo(leftZone, canvas.height);
+                ctx.moveTo(rightZone, 0); ctx.lineTo(rightZone, canvas.height);
                 ctx.stroke();
+                ctx.setLineDash([]);
 
-                if (poses && poses.length > 0) {
-                    const pose = poses[0];
-                    const box = getBoundingBoxFromKeypoints(pose.keypoints);
+                ctx.fillStyle = "rgba(255,255,255,0.5)";
+                ctx.font = "12px sans-serif";
+                ctx.fillText("<< โซนเลี้ยวซ้าย", 10, 20);
+                ctx.fillText("โซนเดินหน้า", (canvas.width/2) - 30, 20);
+                ctx.fillText("โซนเลี้ยวขวา >>", rightZone + 10, 20);
 
-                    if (box) {
-                        // ระบบป้องกันการสลับเป้าหมายกระทันหัน
-                        if (lastTargetCenter) {
-                            const dist = Math.hypot(box.centerX - lastTargetCenter.x, box.centerY - lastTargetCenter.y);
-                            if (dist > canvas.width * 0.65) {
-                                // ถ้ากระโดดไกลเกิน 65% ของจอ ให้รีเซ็ตและหยุดก่อน 1 เฟรม
-                                lastTargetCenter = null;
-                                sendCommand('S');
-                                requestAnimationFrame(detectFrame);
-                                return;
-                            }
-                        }
-                        lastTargetCenter = { x: box.centerX, y: box.centerY };
+                // คัดกรองเฉพาะคน (ลดเกณฑ์ลงเหลือ 0.30 เพื่อให้แท็กติดง่ายและไวที่สุด)
+                const persons = predictions.filter(p => p.class === 'person' && p.score > 0.30);
 
-                        if (safetyTimer) {
-                            clearTimeout(safetyTimer);
-                            safetyTimer = null;
-                        }
-
-                        // 1. วาดกรอบสี่เหลี่ยมรอบตัวคน (Bounding Box) พร้อมป้ายแท็ก
-                        ctx.strokeStyle = "#00FFCC";
-                        ctx.lineWidth = 3;
-                        ctx.strokeRect(box.x, box.y, box.w, box.h);
-
-                        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-                        ctx.fillRect(box.x, Math.max(0, box.y - 28), 110, 26);
-                        ctx.fillStyle = "#00FFCC";
-                        ctx.font = "bold 15px sans-serif";
-                        ctx.fillText("TARGET: ON", box.x + 8, Math.max(18, box.y - 10));
-
-                        // 2. วาดเส้นโครงกระดูก (Skeleton)
-                        const adjacentPairs = poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.MoveNet);
-                        ctx.lineWidth = 4;
-                        ctx.strokeStyle = "#00E5FF";
-                        adjacentPairs.forEach(([i, j]) => {
-                            const kp1 = pose.keypoints[i];
-                            const kp2 = pose.keypoints[j];
-                            if (kp1.score > 0.30 && kp2.score > 0.30) {
-                                ctx.beginPath();
-                                ctx.moveTo(kp1.x, kp1.y);
-                                ctx.lineTo(kp2.x, kp2.y);
-                                ctx.stroke();
+                if (persons.length > 0) {
+                    // ล็อกเป้าหมายคนที่อยู่ใกล้ตำแหน่งเดิมที่สุด (หรือคนแรกหากเพิ่งเริ่ม)
+                    let target = persons[0];
+                    if (lastTargetX !== null && persons.length > 1) {
+                        let minDiff = Infinity;
+                        persons.forEach(p => {
+                            const cx = p.bbox[0] + p.bbox[2] / 2;
+                            const diff = Math.abs(cx - lastTargetX);
+                            if (diff < minDiff) {
+                                minDiff = diff;
+                                target = p;
                             }
                         });
-
-                        // 3. วาดจุดข้อต่อ (Keypoints)
-                        ctx.fillStyle = "#FFFFFF";
-                        pose.keypoints.forEach(kp => {
-                            if (kp.score > 0.30) {
-                                ctx.beginPath();
-                                ctx.arc(kp.x, kp.y, 5, 0, 2 * Math.PI);
-                                ctx.fill();
-                            }
-                        });
-
-                        // 4. คำนวณทิศทางและส่งคำสั่งไป ESP32
-                        const normalizedX = box.centerX / canvas.width;
-                        const normalizedH = box.h / canvas.height;
-
-                        debugDiv.innerText = `ตำแหน่งซ้าย-ขวา: ${(normalizedX * 100).toFixed(0)}% | ขนาดตัว: ${(normalizedH * 100).toFixed(0)}%`;
-
-                        if (normalizedX < 0.35) {
-                            sendCommand('L'); // คนอยู่ฝั่งซ้าย
-                        } else if (normalizedX > 0.65) {
-                            sendCommand('R'); // คนอยู่ฝั่งขวา
-                        } else {
-                            // คนอยู่ตรงกลาง เช็คระยะใกล้-ไกลจากความสูงของกรอบ
-                            if (normalizedH > 0.90) {
-                                sendCommand('S'); // ใกล้มาก (เต็มจอเกิน 90%) ให้หยุดป้องกันชน
-                            } else if (normalizedH < 0.12) {
-                                sendCommand('S'); // ไกลเกินไป ให้หยุด
-                            } else {
-                                sendCommand('F'); // ระยะปกติ สั่งเดินหน้า
-                            }
-                        }
-
-                        // หากคนหายไปจากจอเกิน 1 วินาที ให้สั่งหยุดทันที
-                        safetyTimer = setTimeout(() => {
-                            sendCommand('S');
-                            lastTargetCenter = null;
-                        }, 1000);
-
-                    } else {
-                        debugDiv.innerText = "พิกัด: เห็นคนไม่ชัดเจน (จุดข้อต่อน้อยเกินไป)";
-                        sendCommand('S');
                     }
+
+                    const [x, y, w, h] = target.bbox;
+                    const centerX = x + (w / 2);
+                    const centerY = y + (h / 2);
+                    lastTargetX = centerX;
+
+                    if (safetyTimer) {
+                        clearTimeout(safetyTimer);
+                        safetyTimer = null;
+                    }
+
+                    // วาดกรอบและโครงกระดูกแบบในรูปตัวอย่าง
+                    drawCyberSkeleton(ctx, x, y, w, h, target.score);
+
+                    // วาดจุดเล็งเป้าสีแดงตรงกลางตัวคน
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, 8, 0, 2 * Math.PI);
+                    ctx.fillStyle = "#ff0055";
+                    ctx.fill();
+
+                    // คำนวณสัดส่วนเพื่อสั่งเดิน (คิดเป็น % เทียบกับหน้าจอ)
+                    const normX = centerX / canvas.width;
+                    const areaRatio = (w * h) / (canvas.width * canvas.height);
+
+                    debugDiv.innerText = `จุดกึ่งกลางคน: ${(normX * 100).toFixed(0)}% | ขนาดตัว: ${(areaRatio * 100).toFixed(0)}% ของจอ`;
+
+                    // ตรรกะการสั่งงานมอเตอร์ที่ปรับให้แม่นยำขึ้น
+                    if (normX < 0.35) {
+                        sendCommand('L'); // จุดกลางตัวคนอยู่ในโซนซ้าย
+                    } else if (normX > 0.65) {
+                        sendCommand('R'); // จุดกลางตัวคนอยู่ในโซนขวา
+                    } else {
+                        // คนอยู่โซนตรงกลาง เช็คขนาดตัวว่าใกล้ชนหรือยัง
+                        if (areaRatio > 0.70) {
+                            sendCommand('S'); // ตัวใหญ่เกิน 70% ของจอ = ประชิดตัวแล้ว ให้หยุด
+                        } else {
+                            sendCommand('F'); // ระยะเดินตามปกติ สั่งเดินหน้าทันที!
+                        }
+                    }
+
+                    // หากคนหลุดเฟรมไปเกิน 1 วินาที ให้สั่งหยุด
+                    safetyTimer = setTimeout(() => {
+                        sendCommand('S');
+                        lastTargetX = null;
+                    }, 1000);
+
                 } else {
-                    ctx.fillStyle = "rgba(255, 82, 82, 0.8)";
+                    ctx.fillStyle = "rgba(255, 60, 60, 0.85)";
                     ctx.font = "bold 20px sans-serif";
-                    ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
-                    debugDiv.innerText = "พิกัด: รอตรวจจับคน...";
-                    lastTargetCenter = null;
+                    ctx.fillText("ไม่พบคนในเฟรม", 20, 50);
+                    debugDiv.innerText = "พิกัด: กำลังค้นหาคน...";
+                    lastTargetX = null;
                 }
             } catch (err) {
-                console.warn("Detection error:", err);
+                console.warn("Frame skipped:", err);
             }
             
             requestAnimationFrame(detectFrame);
