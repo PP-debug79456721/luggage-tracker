@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web App กระเป๋าเดินตาม (AI + BLE)</title>
+    <title>Web App กระเป๋าเดินตาม (Wi-Fi Mode)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -11,28 +11,25 @@
         #video-container { position: relative; display: inline-block; margin-top: 20px; }
         video, canvas { border-radius: 10px; background: #000; max-width: 100%; height: auto; }
         canvas { position: absolute; top: 0; left: 0; }
-        button, select { padding: 12px 20px; font-size: 16px; margin: 5px; cursor: pointer; border-radius: 5px; border: none; }
-        button { background: #007bff; color: white; }
+        button, select, input { padding: 12px; font-size: 16px; margin: 5px; border-radius: 5px; border: none; }
+        button { background: #007bff; color: white; cursor: pointer; }
         button:disabled { background: #555; cursor: not-allowed; }
-        select { background: #fff; color: #000; max-width: 300px; }
+        input { width: 250px; text-align: center; }
         #status { margin-top: 15px; font-size: 18px; color: #4caf50; }
         #command-status { font-size: 24px; font-weight: bold; color: #ffeb3b; margin-top: 10px; }
     </style>
 </head>
 <body>
-
-    <h2>AI Luggage Tracker</h2>
+    <h2>AI Luggage Tracker (Wi-Fi Mode)</h2>
     
-    <button id="connectBtn">1. เชื่อมต่อบลูทูธ (ESP32)</button>
-    <br><br>
+    <div>
+        <input type="text" id="espIpInput" placeholder="ใส่ IP ของ ESP32 เช่น 192.168.64.81">
+    </div>
+    <br>
+    <select id="cameraSelect"><option value="">-- กำลังค้นหากล้อง --</option></select>
+    <button id="startAiBtn">เปิดกล้องและ AI</button>
     
-    <!-- เมนูเลือกกล้องป้องกันจอดำ -->
-    <select id="cameraSelect">
-        <option value="">-- กำลังค้นหากล้อง --</option>
-    </select>
-    <button id="startAiBtn" disabled>2. เปิดกล้องและ AI</button>
-    
-    <div id="status">สถานะ: รอการเชื่อมต่อ</div>
+    <div id="status">สถานะ: รอเปิดกล้อง</div>
     <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
 
     <div id="video-container">
@@ -41,181 +38,139 @@
     </div>
 
     <script>
-        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-
-        let bleCharacteristic = null;
         let model = null;
         let safetyTimer = null;
         let lastCommand = 'S';
-        let currentStream = null;
         let isDetecting = false;
 
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const statusDiv = document.getElementById('status');
-        const cmdStatusDiv = document.getElementById('command-status');
-        const connectBtn = document.getElementById('connectBtn');
         const startAiBtn = document.getElementById('startAiBtn');
+        const espIpInput = document.getElementById('espIpInput');
+        const cmdStatusDiv = document.getElementById('command-status');
+        const statusDiv = document.getElementById('status');
         const cameraSelect = document.getElementById('cameraSelect');
 
-        // ค้นหากล้องทั้งหมดในเครื่อง
-        async function getCameras() {
+        // 1. ป้องกัน undefined ตอนค้นหากล้อง (Camera Devices Check)
+        window.addEventListener('load', async () => {
             try {
-                const initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
-                
-                cameraSelect.innerHTML = '';
-                
-                if (videoDevices.length === 0) {
-                    cameraSelect.innerHTML = '<option value="">ไม่พบกล้องในเครื่อง</option>';
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                    cameraSelect.innerHTML = '<option value="">เบราว์เซอร์ไม่รองรับกล้อง</option>';
                     return;
                 }
-
-                videoDevices.forEach((device, index) => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `กล้องตัวที่ ${index + 1}`;
-                    cameraSelect.appendChild(option);
-                });
-
-                initialStream.getTracks().forEach(track => track.stop());
-            } catch (error) {
-                console.error("Error accessing cameras:", error);
-                cameraSelect.innerHTML = '<option value="">ไม่สามารถเข้าถึงกล้องได้</option>';
-            }
-        }
-
-        window.addEventListener('load', getCameras);
-
-        // 1. ระบบ Bluetooth (ค้นหาด้วยชื่อปกติ "ESP32_Luggage")
-        connectBtn.addEventListener('click', async () => {
-            try {
-                statusDiv.innerText = "กำลังค้นหา ESP32_Luggage...";
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32_Luggage' }],
-                    optionalServices: [SERVICE_UUID]
-                });
-
-                const server = await device.gatt.connect();
-                const service = await server.getPrimaryService(SERVICE_UUID);
-                bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
                 
-                statusDiv.innerText = "เชื่อมต่อ ESP32 สำเร็จแล้ว!";
-                connectBtn.disabled = true;
-                startAiBtn.disabled = false;
-            } catch (error) {
-                console.error(error);
-                statusDiv.innerText = "การเชื่อมต่อล้มเหลว: " + error.message;
+                cameraSelect.innerHTML = videoDevices.length ? '' : '<option value="">ไม่พบกล้อง</option>';
+                videoDevices.forEach((d, i) => {
+                    cameraSelect.add(new Option(d.label || `กล้องตัวที่ ${i+1}`, d.deviceId));
+                });
+            } catch (err) {
+                console.error("Error loading cameras:", err);
+                cameraSelect.innerHTML = '<option value="">เกิดข้อผิดพลาดในการโหลดกล้อง</option>';
             }
         });
 
+        // 2. ฟังก์ชันส่งคำสั่งผ่าน Wi-Fi แบบไม่บล็อกระบบ
         async function sendCommand(cmd) {
             if (cmd === lastCommand) return;
             lastCommand = cmd;
             cmdStatusDiv.innerText = "คำสั่งปัจจุบัน: " + cmd;
             
-            if (bleCharacteristic) {
+            const ip = espIpInput.value.trim();
+            if (ip) {
                 try {
-                    const encoder = new TextEncoder();
-                    await bleCharacteristic.writeValue(encoder.encode(cmd));
-                } catch (err) {
-                    console.error("ส่งคำสั่งไม่สำเร็จ: ", err);
+                    fetch(`http://${ip}/${cmd}`, { method: 'GET', mode: 'no-cors' }).catch(() => {});
+                } catch(e) {
+                    // ป้องกัน Network Error ค้าง
                 }
             }
         }
 
-        // 2. ระบบเปิดกล้องและประมวลผล AI
+        // 3. ป้องกัน undefined ตอนดึงภาพจากกล้อง
         startAiBtn.addEventListener('click', async () => {
-            startAiBtn.disabled = true;
-            statusDiv.innerText = "กำลังโหลดโมเดล AI และเปิดกล้อง...";
-            
-            if (currentStream) {
-                currentStream.getTracks().forEach(track => track.stop());
+            const ip = espIpInput.value.trim();
+            if (!ip) { 
+                alert("กรุณาใส่ IP ของ ESP32 ในช่องด้านบนก่อนครับ!"); 
+                return; 
             }
-
+            
+            startAiBtn.disabled = true;
+            statusDiv.innerText = "กำลังโหลดโมเดล AI...";
+            
             const selectedCameraId = cameraSelect.value;
-            const constraints = {
-                video: {
-                    deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
-                }
+            const constraints = { 
+                video: selectedCameraId 
+                    ? { deviceId: { exact: selectedCameraId }, width: { ideal: 640 }, height: { ideal: 480 } }
+                    : { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } } // fallback ใช้กล้องหลัง
             };
 
             try {
-                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = currentStream;
-
+                video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
                 if (!model) {
                     model = await cocoSsd.load();
                 }
-                
-                statusDiv.innerText = "ระบบพร้อมทำงาน! กำลังตามหาคน...";
-                
-                if (!isDetecting) {
-                    isDetecting = true;
-                    detectFrame();
+                statusDiv.innerText = "ระบบพร้อม! กำลังตามหาคน...";
+                if (!isDetecting) { 
+                    isDetecting = true; 
+                    detectFrame(); 
                 }
-            } catch (error) {
-                console.error("Camera Error:", error);
-                statusDiv.innerText = "เปิดกล้องไม่สำเร็จ: " + error.message;
+            } catch (err) {
+                console.error("Start Camera Error:", err);
+                statusDiv.innerText = "Error: " + err.message;
                 startAiBtn.disabled = false;
             }
         });
 
+        // 4. ป้องกัน undefined ตอนโมเดลอ่านค่า bbox
         async function detectFrame() {
-            if (video.readyState !== 4) {
+            if (!video || video.readyState !== 4 || !model) {
                 requestAnimationFrame(detectFrame);
                 return;
             }
 
-            const predictions = await model.detect(video);
-            const person = predictions.find(p => p.class === 'person' && p.score > 0.60);
-
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            if (person) {
-                if (safetyTimer) {
-                    clearTimeout(safetyTimer);
-                    safetyTimer = null;
+            try {
+                const predictions = await model.detect(video);
+                
+                // ตรวจสอบ array predictions ไม่ให้เป็น undefined ก่อนนำไปหาคน
+                let person = null;
+                if (predictions && Array.isArray(predictions)) {
+                    person = predictions.find(p => p.class === 'person' && p.score > 0.60);
                 }
 
-                const [x, y, width, height] = person.bbox;
-                ctx.strokeStyle = "#00FF00";
-                ctx.lineWidth = 4;
-                ctx.strokeRect(x, y, width, height);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                const centerX = x + (width / 2);
-                const screenWidth = canvas.width;
-                const normalizedX = centerX / screenWidth;
-                const normalizedWidth = width / screenWidth;
-
-                if (normalizedX < 0.35) {
-                    sendCommand('L');
-                } else if (normalizedX > 0.65) {
-                    sendCommand('R');
-                } else {
-                    if (normalizedWidth > 0.6) {
-                        sendCommand('S'); 
-                    } else if (normalizedWidth < 0.15) {
-                        sendCommand('S'); 
-                    } else {
-                        sendCommand('F'); 
+                // ตรวจสอบขั้นสุดท้าย: ต้องมีคน มี bbox และ bbox ต้องเป็นรูปแบบ array เท่านั้น
+                if (person && person.bbox && Array.isArray(person.bbox)) {
+                    if (safetyTimer) {
+                        clearTimeout(safetyTimer);
+                        safetyTimer = null;
                     }
+
+                    const [x, y, w, h] = person.bbox;
+                    ctx.strokeStyle = "#00FF00"; 
+                    ctx.lineWidth = 4; 
+                    ctx.strokeRect(x, y, w, h);
+                    
+                    const normalizedX = (x + (w / 2)) / canvas.width;
+                    const normalizedW = w / canvas.width;
+
+                    if (normalizedX < 0.35) sendCommand('L');
+                    else if (normalizedX > 0.65) sendCommand('R');
+                    else if (normalizedW > 0.6 || normalizedW < 0.15) sendCommand('S');
+                    else sendCommand('F');
+
+                    safetyTimer = setTimeout(() => sendCommand('S'), 1000);
+                } else {
+                    ctx.fillStyle = "rgba(255,0,0,0.5)"; 
+                    ctx.font = "20px sans-serif";
+                    ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
                 }
-
-                safetyTimer = setTimeout(() => {
-                    sendCommand('S');
-                }, 1000);
-
-            } else {
-                ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
-                ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
+            } catch (err) {
+                console.warn("Detection skipped this frame:", err);
             }
-
+            
             requestAnimationFrame(detectFrame);
         }
     </script>
