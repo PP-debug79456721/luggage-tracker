@@ -3,46 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web App กระเป๋าเดินตาม (Wi-Fi Mode)</title>
-    <!-- โหลดไลบรารี AI จาก TensorFlow.js -->
+    <title>Web App กระเป๋าเดินตาม (Pose Detection)</title>
+    <!-- เปลี่ยนไลบรารี AI เป็น Pose Detection (MoveNet) -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
     <style>
-        body { 
-            font-family: sans-serif; 
-            text-align: center; 
-            background: #222; 
-            color: white; 
-            margin: 0; 
-            padding: 20px; 
-        }
+        body { font-family: sans-serif; text-align: center; background: #222; color: white; margin: 0; padding: 20px; }
+        #video-container { position: relative; width: 100%; max-width: 640px; margin: 20px auto; }
+        video { width: 100%; height: auto; display: block; border-radius: 10px; background: #000; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; pointer-events: none; z-index: 10; }
         
-        /* --- แก้ไข CSS เพื่อแก้จอดำและปรับให้พอดีมือถือ --- */
-        #video-container { 
-            position: relative; 
-            width: 100%; 
-            max-width: 640px; /* จำกัดความกว้างไม่ให้ล้นจอบนคอมพิวเตอร์ */
-            margin: 20px auto; 
-        }
-        video { 
-            width: 100%; 
-            height: auto; 
-            display: block; 
-            border-radius: 10px; 
-            background: #000; /* พื้นหลังสีดำเผื่อตอนกล้องยังไม่มา */
-        }
-        canvas { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100%; /* ยืดให้กว้างเท่า video */
-            height: 100%; /* ยืดให้สูงเท่า video */
-            background: transparent; /* สำคัญ: ทำให้โปร่งใส ไม่บังกล้อง */
-            pointer-events: none; /* ให้แตะจอทะลุ canvas ได้ */
-            z-index: 10;
-        }
-        /* ------------------------------------------- */
-
         button, select, input { padding: 12px; font-size: 16px; margin: 5px; border-radius: 5px; border: none; }
         button { background: #007bff; color: white; cursor: pointer; }
         button:disabled { background: #555; cursor: not-allowed; }
@@ -52,7 +22,7 @@
     </style>
 </head>
 <body>
-    <h2>AI Luggage Tracker (Wi-Fi Mode)</h2>
+    <h2>AI Luggage Tracker (Skeleton Mode)</h2>
     
     <div>
         <input type="text" id="espIpInput" placeholder="ใส่ IP ของ ESP32 เช่น 192.168.64.81">
@@ -64,14 +34,13 @@
     <div id="status">สถานะ: รอเปิดกล้อง</div>
     <div id="command-status">คำสั่งปัจจุบัน: S (หยุด)</div>
 
-    <!-- ลบ width/height ออก เพื่อให้ปรับขนาดตามจอมือถืออัตโนมัติ -->
     <div id="video-container">
         <video id="webcam" autoplay playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
 
     <script>
-        let model = null;
+        let detector = null;
         let safetyTimer = null;
         let lastCommand = 'S';
         let isDetecting = false;
@@ -85,7 +54,6 @@
         const statusDiv = document.getElementById('status');
         const cameraSelect = document.getElementById('cameraSelect');
 
-        // ดึงรายชื่อกล้องตอนเปิดเว็บ
         window.addEventListener('load', async () => {
             try {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
@@ -105,7 +73,6 @@
             }
         });
 
-        // ฟังก์ชันส่งคำสั่ง Wi-Fi ไปหา ESP32
         async function sendCommand(cmd) {
             if (cmd === lastCommand) return;
             lastCommand = cmd;
@@ -113,22 +80,17 @@
             
             const ip = espIpInput.value.trim();
             if (ip) {
-                try {
-                    fetch(`http://${ip}/${cmd}`, { method: 'GET', mode: 'no-cors' }).catch(() => {});
-                } catch(e) {}
+                try { fetch(`http://${ip}/${cmd}`, { method: 'GET', mode: 'no-cors' }).catch(() => {}); } 
+                catch(e) {}
             }
         }
 
-        // เริ่มเปิดกล้องและ AI
         startAiBtn.addEventListener('click', async () => {
             const ip = espIpInput.value.trim();
-            if (!ip) { 
-                alert("กรุณาใส่ IP ของ ESP32 ในช่องด้านบนก่อนครับ!"); 
-                return; 
-            }
+            if (!ip) { alert("กรุณาใส่ IP ของ ESP32 ในช่องด้านบนก่อนครับ!"); return; }
             
             startAiBtn.disabled = true;
-            statusDiv.innerText = "กำลังโหลดโมเดล AI...";
+            statusDiv.innerText = "กำลังโหลดโมเดลโครงกระดูก (MoveNet)...";
             
             const selectedCameraId = cameraSelect.value;
             const constraints = { 
@@ -140,7 +102,6 @@
             try {
                 video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
                 
-                // --- ซิงค์ความละเอียดวิดีโอกับ Canvas ให้ตรงกันเพื่อไม่ให้กรอบเขียวลอย ---
                 video.onloadedmetadata = () => {
                     video.width = video.videoWidth;
                     video.height = video.videoHeight;
@@ -148,64 +109,94 @@
                     canvas.height = video.videoHeight;
                 };
 
-                if (!model) {
-                    model = await cocoSsd.load();
+                if (!detector) {
+                    // โหลดโมเดล MoveNet
+                    const detectorConfig = { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING };
+                    detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, detectorConfig);
                 }
+                
                 statusDiv.innerText = "ระบบพร้อม! กำลังตามหาคน...";
                 if (!isDetecting) { 
                     isDetecting = true; 
                     detectFrame(); 
                 }
             } catch (err) {
-                console.error("Camera Error:", err);
                 statusDiv.innerText = "Error: " + err.message;
                 startAiBtn.disabled = false;
             }
         });
 
-        // วนลูปประมวลผลภาพหาคน
         async function detectFrame() {
-            if (!video || video.readyState !== 4 || !model) {
+            if (!video || video.readyState !== 4 || !detector) {
                 requestAnimationFrame(detectFrame);
                 return;
             }
 
             try {
-                const predictions = await model.detect(video);
-                
-                let person = null;
-                if (predictions && Array.isArray(predictions)) {
-                    person = predictions.find(p => p.class === 'person' && p.score > 0.60);
-                }
-
+                const poses = await detector.estimatePoses(video);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                if (person && person.bbox && Array.isArray(person.bbox)) {
+                if (poses && poses.length > 0) {
+                    const pose = poses[0];
+                    
                     if (safetyTimer) {
                         clearTimeout(safetyTimer);
                         safetyTimer = null;
                     }
 
-                    const [x, y, w, h] = person.bbox;
-                    ctx.strokeStyle = "#00FF00"; 
-                    ctx.lineWidth = 4; 
-                    ctx.strokeRect(x, y, w, h);
-                    
-                    const normalizedX = (x + (w / 2)) / canvas.width;
-                    const normalizedW = w / canvas.width;
+                    // 1. วาดเส้นโครงกระดูก (Skeleton)
+                    const adjacentKeyPoints = poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.MoveNet);
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = '#00FFCC'; // สีเส้นโครงกระดูก
+                    adjacentKeyPoints.forEach(([i, j]) => {
+                        const kp1 = pose.keypoints[i];
+                        const kp2 = pose.keypoints[j];
+                        if (kp1.score > 0.4 && kp2.score > 0.4) {
+                            ctx.beginPath();
+                            ctx.moveTo(kp1.x, kp1.y);
+                            ctx.lineTo(kp2.x, kp2.y);
+                            ctx.stroke();
+                        }
+                    });
 
-                    // เงื่อนไขสั่งเลี้ยวและเดิน
-                    if (normalizedX < 0.35) sendCommand('L'); // คนอยู่ซ้าย
-                    else if (normalizedX > 0.65) sendCommand('R'); // คนอยู่ขวา
-                    else if (normalizedW > 0.6 || normalizedW < 0.15) sendCommand('S'); // คนอยู่ใกล้ไปหรือไกลไป
-                    else sendCommand('F'); // คนอยู่ตรงกลางและระยะพอดี
+                    // 2. วาดจุดตามข้อต่อ (Keypoints)
+                    ctx.fillStyle = '#FFFFFF';
+                    pose.keypoints.forEach(kp => {
+                        if (kp.score > 0.4) {
+                            ctx.beginPath();
+                            ctx.arc(kp.x, kp.y, 6, 0, 2 * Math.PI);
+                            ctx.fill();
+                            ctx.stroke();
+                        }
+                    });
 
-                    // หากหยุดหาคนเจอเกิน 1 วินาที ให้สั่งหยุดเพื่อความปลอดภัย
-                    safetyTimer = setTimeout(() => sendCommand('S'), 1000);
+                    // 3. คำนวณกรอบนอก (Bounding Box) แบบในภาพ
+                    if (pose.box) {
+                        const x = pose.box.xMin;
+                        const y = pose.box.yMin;
+                        const w = pose.box.width;
+                        const h = pose.box.height;
+                        
+                        // วาดกรอบรอบตัวคน
+                        ctx.strokeStyle = "rgba(0, 255, 204, 0.7)"; 
+                        ctx.lineWidth = 2; 
+                        ctx.strokeRect(x, y, w, h);
+
+                        // คำนวณพิกัดสำหรับสั่งงานรถ
+                        const normalizedX = (x + (w / 2)) / canvas.width;
+                        const normalizedW = w / canvas.width;
+
+                        if (normalizedX < 0.35) sendCommand('L'); 
+                        else if (normalizedX > 0.65) sendCommand('R'); 
+                        else if (normalizedW > 0.6 || normalizedW < 0.15) sendCommand('S'); 
+                        else sendCommand('F'); 
+
+                        safetyTimer = setTimeout(() => sendCommand('S'), 1000);
+                    }
                 } else {
                     ctx.fillStyle = "rgba(255,0,0,0.5)"; 
                     ctx.font = "20px sans-serif";
-                    ctx.fillText("ไม่พบเป้าหมาย", 20, 40);
+                    ctx.fillText("ไม่พบโครงสร้างคน", 20, 40);
                 }
             } catch (err) {
                 console.warn("Detection skipped this frame:", err);
